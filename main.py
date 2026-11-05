@@ -1,5 +1,5 @@
 import re
-from itertools import permutations
+from itertools import combinations, permutations
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -74,10 +74,12 @@ def calculate_association_rules(baskets, total_days):
         )
 
     rules_df = pd.DataFrame(rules)
-    return rules_df
+    return rules_df, item_counts, pair_counts
 
 
-rules_df = calculate_association_rules(baskets, total_days)
+rules_df, item_counts, pair_counts = calculate_association_rules(
+    baskets, total_days
+)
 
 # 사이드바 컨트롤
 st.sidebar.header("필터 및 정렬 설정")
@@ -90,8 +92,14 @@ sort_option = st.sidebar.radio(
     "정렬 기준 선택", options=["향상도", "신뢰도", "동시"]
 )
 
-# 데이터 필터링
-filtered_df = rules_df.copy()
+# 최소 동시 일수 슬라이더 추가
+min_cooccurrence = st.sidebar.slider(
+    "최소 동시 일수", min_value=1, max_value=10, value=1
+)
+
+# 데이터 필터링 (최소 동시 일수 및 메뉴 필터 적용)
+filtered_df = rules_df[rules_df["동시"] >= min_cooccurrence].copy()
+
 if selected_menu != "전체":
     filtered_df = filtered_df[
         (filtered_df["조건"] == selected_menu)
@@ -104,10 +112,12 @@ filtered_df = filtered_df.sort_values(by=sort_option, ascending=False).reset_ind
 )
 
 # 상단 요약 정보 출력
-unique_pairs_count = len(filtered_df) // 2  # 양방향 규칙이므로 쌍의 수는 절반
 st.write(
     f"**급식 일수:** {total_days}일 | **메뉴 종류 수:** {len(all_menu_list)}개 | **함께 나온 적이 있는 메뉴 쌍의 수:** {len(rules_df) // 2}쌍"
 )
+
+# 표에 남은 규칙 개수 안내 문구
+st.info(f"💡 현재 조건(최소 동시 일수 {min_cooccurrence}일 이상)에 맞는 필터링된 연관 규칙 수: **{len(filtered_df)}개**")
 
 st.markdown("---")
 
@@ -149,3 +159,43 @@ if not top10_df.empty:
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("표시할 연관 규칙이 없습니다.")
+
+# 함께 나온 적 없는 짝 화면 추가
+st.markdown("---")
+st.subheader("🚫 함께 나온 적 없는 짝")
+
+target_menu = st.selectbox(
+    "기준 메뉴를 선택하세요 (독립 분석용)",
+    options=all_menu_list,
+    key="unpaired_menu_select",
+)
+
+if target_menu:
+    target_count = item_counts.get(target_menu, 0)
+    st.write(f"📌 선택한 메뉴 **'{target_menu}'** 이(가) 나온 날 수: **{target_count}일**")
+
+    # 함께 나온 적 없는 메뉴 탐색
+    never_paired = []
+    for other_menu in all_menu_list:
+        if other_menu == target_menu:
+            continue
+
+        # 무순서 쌍 키 확인
+        pair_key1 = (target_menu, other_menu)
+        pair_key2 = (other_menu, target_menu)
+
+        co_count = pair_counts.get(pair_key1, 0) + pair_counts.get(pair_key2, 0)
+
+        # 한번도 같이 안 나왔고, 혼자서는 10일 이상 나온 메뉴
+        if co_count == 0:
+            other_count = item_counts.get(other_menu, 0)
+            if other_count >= 10:
+                never_paired.append({"메뉴": other_menu, "단독 등장 일수": other_count})
+
+    if never_paired:
+        never_paired_df = pd.DataFrame(never_paired).sort_values(
+            by="단독 등장 일수", ascending=False
+        ).reset_index(drop=True)
+        st.dataframe(never_paired_df, use_container_width=True)
+    else:
+        st.write("해당 메뉴와 한 번도 같이 나오지 않은 10일 이상 등장 메뉴가 없습니다.")
